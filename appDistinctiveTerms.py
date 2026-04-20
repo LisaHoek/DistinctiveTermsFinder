@@ -14,7 +14,7 @@ SCOPE_LABEL_TO_COL = {
     "DS text": "DS extended",
 }
 
-SUPPORTED_UNITS = ["single words", "single nouns", "phrase nouns", "single and phrase nouns"]
+SUPPORTED_UNITS = ["words", "single nouns", "phrase nouns", "single and phrase nouns"]
 
 
 def get_available_scopes(df):
