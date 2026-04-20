@@ -176,18 +176,18 @@ with col1:
     st.markdown("### Distinctive for Group A (z > 0)")
     st.dataframe(
         res_a[["term", "count_a", "count_b", "z", "log_odds", "total"]],
-        use_container_width=True
+        width='stretch'
     )
 
 with col2:
     st.markdown("### Distinctive for Group B (z < 0)")
     st.dataframe(
         res_b[["term", "count_a", "count_b", "z", "log_odds", "total"]],
-        use_container_width=True
+        width='stretch'
     )
 
 st.markdown("### Full result table")
-st.dataframe(result, use_container_width=True)
+st.dataframe(result, width='stretch')
 
 csv = result.to_csv(index=False).encode("utf-8")
 st.download_button(
