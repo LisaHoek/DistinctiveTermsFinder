@@ -1,25 +1,57 @@
+"""
+Streamlit app for comparing language use across two advertisement groups.
+
+This application allows the user to:
+
+1. Upload a CSV dataframe of Dutch dating advertisements.
+2. Select a text scope:
+   - Whole text
+   - Supply-side text
+   - Demand-side text
+3. Select a linguistic unit:
+   - words
+   - single nouns
+   - phrase nouns
+   - single and phrase nouns
+4. Define two comparison groups using metadata filters.
+5. Compute weighted log-odds scores to identify terms that are
+   relatively distinctive for one group versus the other.
+
+The app assumes that the uploaded dataframe already contains precomputed list-valued columns such as:
+    - words OCR extended
+    - single nouns SS extended
+    - phrase nouns DS extended
+
+These columns are converted into occurrence tables on demand.
+"""
+
 import streamlit as st
 import pandas as pd
+
 from helpers.helper_UI import render_groups, format_group_spec
 from helpers.helper_statistics import compare_groups
 from helpers.helper_extraction import build_occurrence_table
 
-# =========================
+# ---------------------------------------------------------------------------
 # Dynamic availability
-# =========================
+# ---------------------------------------------------------------------------
 
 SCOPE_LABEL_TO_COL = {
+# Mapping from user-facing labels to the underlying dataframe columns.
     "Whole text": "OCR extended",
     "SS text": "SS extended",
     "DS text": "DS extended",
 }
 
-SUPPORTED_UNITS = ["words", "single nouns", "phrase nouns", "single and phrase nouns"]
+SUPPORTED_UNITS = [
+# Supported types of precomputed language units.    
+    "words", "single nouns", "phrase nouns", "single and phrase nouns"
+]
 
 
 def get_available_scopes(df):
     """
-    Only show scopes whose base text column exists.
+    Return only those text scopes whose base text column is present.
     """
     return {
         label: col
@@ -39,12 +71,24 @@ def get_available_units(df, text_col):
             units.append(unit)
     return units
 
-# =========================
-# Main app
-# =========================
+# ---------------------------------------------------------------------------
+# Streamlit page
+# ---------------------------------------------------------------------------
 
 st.set_page_config(page_title="Language comparison", layout="wide")
 st.title("Language comparison for Dutch dating advertisements")
+
+st.markdown(
+    """
+    This app compares linguistic patterns across two user-defined groups of advertisements.
+    It uses **weighted log-odds with z-scores** to identify terms that are relatively distinctive for one group versus another.
+
+    Upload a CSV file containing:
+    - a unique advertisement ID column: `Nr advertisement`
+    - at least one base text column such as `OCR extended`, `SS extended`, or `DS extended`
+    - one or more precomputed list columns such as `single and phrase nouns OCR extended`
+    """
+)
 
 uploaded_file = st.file_uploader("Upload dataframe (.csv)", type=["csv"])
 
@@ -52,12 +96,18 @@ if uploaded_file is None:
     st.info("Upload your dataframe to start.")
     st.stop()
 
+
+# ---------------------------------------------------------------------------
+# Load and validate input data
+# ---------------------------------------------------------------------------
+
 ads_df = pd.read_csv(uploaded_file)
 
 if "Nr advertisement" not in ads_df.columns:
     st.error("Missing required column: 'Nr advertisement'")
     st.stop()
 
+# Convert Year to numeric if present, because it is commonly used for filtering.
 if "Year" in ads_df.columns:
     ads_df["Year"] = pd.to_numeric(ads_df["Year"], errors="coerce")
 
@@ -66,6 +116,11 @@ available_scopes = get_available_scopes(ads_df)
 if not available_scopes:
     st.error("No available text scopes found. Expected at least one of: 'OCR extended', 'SS extended', 'DS extended'.")
     st.stop()
+
+
+# ---------------------------------------------------------------------------
+# Sidebar settings
+# ---------------------------------------------------------------------------
 
 st.sidebar.header("Analysis settings")
 
@@ -86,7 +141,12 @@ unit_type = st.sidebar.selectbox(
     available_units
 )
 
-min_count = st.sidebar.slider("Minimum total frequency", min_value=1, max_value=50, value=5, step=1)
+min_count = st.sidebar.slider(
+    "Minimum total frequency", 
+    min_value=1, 
+    max_value=50, 
+    value=5, 
+    step=1)
 
 remove_insignificant = st.sidebar.checkbox(
     "Remove insignificant z-scores",
@@ -108,7 +168,13 @@ term_filter = st.sidebar.text_input(
     help="Example: huwelijk"
 )
 
+# Render the sidebar controls for defining Group A and Group B.
 group_a, group_b = render_groups(ads_df)
+
+
+# ---------------------------------------------------------------------------
+# Build occurrence table and run comparison
+# ---------------------------------------------------------------------------
 
 with st.spinner(f"Building occurrence table from precomputed column for {unit_type} / {text_col}..."):
     occ_df, source_info = build_occurrence_table(
@@ -131,6 +197,11 @@ if result.empty:
     st.warning("No terms available for this comparison after filtering/min_count.")
     st.stop()
 
+
+# ---------------------------------------------------------------------------
+# Optional filtering of the result table
+# ---------------------------------------------------------------------------
+
 if term_filter.strip():
     result = result[
         result["term"].astype(str).str.contains(term_filter.strip(), case=False, na=False, regex=False)
@@ -147,8 +218,16 @@ if result.empty:
     st.warning("No terms remain after z-score significance filtering.")
     st.stop()
 
+# Split results by sign of z-score:
+# - z > 0 : distinctive for Group A
+# - z < 0 : distinctive for Group B
 res_a = result[result["z"] > 0].sort_values("z", ascending=False)
 res_b = result[result["z"] < 0].sort_values("z", ascending=True)
+
+
+# ---------------------------------------------------------------------------
+# Output: summary and group definitions
+# ---------------------------------------------------------------------------
 
 st.subheader("Comparison summary")
 c1, c2, c3, c4, c5 = st.columns(5)
@@ -170,6 +249,11 @@ with g2:
     st.markdown("**Group B**")
     st.code(format_group_spec(group_b))
 
+
+# ---------------------------------------------------------------------------
+# Output: distinctive term tables
+# ---------------------------------------------------------------------------
+
 col1, col2 = st.columns(2)
 
 with col1:
@@ -189,6 +273,11 @@ with col2:
 st.markdown("### Full result table")
 st.dataframe(result, width='stretch')
 
+
+# ---------------------------------------------------------------------------
+# Download
+# ---------------------------------------------------------------------------
+
 csv = result.to_csv(index=False).encode("utf-8")
 st.download_button(
     "Download full result as CSV",
@@ -196,6 +285,11 @@ st.download_button(
     file_name=f"log_odds_{unit_type}_{text_col.replace(' ', '_')}.csv",
     mime="text/csv"
 )
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic information
+# ---------------------------------------------------------------------------
 
 st.subheader("Occurrence source")
 st.info(source_info)

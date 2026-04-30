@@ -1,13 +1,19 @@
+"""
+UI helper functions for interactive group definition in the Streamlit app.
+
+This module contains the logic for:
+- selecting metadata columns that can be used for conditioning
+- rendering filtering rules for Group A and Group B
+- formatting group specifications for display in the app
+"""
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 from helpers.helper_statistics import is_effectively_numeric
 
-# =========================
-# UI helpers
-# =========================
-
 EXCLUDED_CONDITIONING_COLS = {
+# Columns excluded from the group-definition interface because they are: IDs, links / raw metadata, large text fields, or precomputed linguistic columns
     'Nr advertisement',
     'Link',
     'OCR - Delpher',
@@ -44,6 +50,14 @@ EXCLUDED_CONDITIONING_COLS = {
 
 
 def get_conditioning_columns(df):
+    """
+    Return metadata columns suitable for defining comparison groups.
+
+    A column is included if:
+    - it is not in the explicit exclusion list
+    - it has at least one non-null value
+    - it contains at least two distinct values
+    """
     cols = []
     for c in df.columns:
         if c in EXCLUDED_CONDITIONING_COLS:
@@ -58,6 +72,14 @@ def get_conditioning_columns(df):
 
 
 def render_group_spec(df, title, key_prefix):
+    """
+    Render Streamlit sidebar widgets for defining one group specification.
+
+    For each condition, the user selects:
+    - a metadata column
+    - either a numeric operator and threshold
+      or one/more categorical values
+    """
     st.sidebar.markdown(f"### {title}")
 
     metadata_cols = get_conditioning_columns(df)
@@ -148,15 +170,21 @@ def render_group_spec(df, title, key_prefix):
 
 
 def render_groups(df):
+    """
+    Render the sidebar controls for both Group A and Group B.
+    """
     group_a = render_group_spec(df, "Group A", "group_a")
     group_b = render_group_spec(df, "Group B", "group_b")
     return group_a, group_b
 
 
 def format_group_spec(spec):
-#    if spec == "REST":
-#        return "REST"
+    """
+    Format a group specification as a readable multiline string.
 
+    This is used in the main app to display the current definitions
+    of Group A and Group B.
+    """
     lines = []
     for col, rule in spec.items():
         if isinstance(rule, tuple) and len(rule) == 2:
