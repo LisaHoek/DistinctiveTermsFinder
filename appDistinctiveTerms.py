@@ -28,7 +28,7 @@ These columns are converted into occurrence tables on demand.
 import streamlit as st
 import pandas as pd
 
-from helpers.helper_UI import render_groups, format_group_spec
+from helpers.helper_UI import render_groups, format_group_definition
 from helpers.helper_statistics import compare_groups
 from helpers.helper_extraction import build_occurrence_table
 
@@ -162,15 +162,32 @@ z_threshold = st.sidebar.number_input(
     help="Common default for approximate two-sided significance"
 )
 
-term_filter = st.sidebar.text_input(
+term_filters = st.sidebar.multiselect(
     "Filter terms containing",
-    value="",
-    help="Example: huwelijk"
+    options=[],
+    default=[],
+    accept_new_options=True,
+    help="Type a term and press Enter. Each term is matched as a substring. Example: huwelijk"
 )
 
 # Render the sidebar controls for defining Group A and Group B.
 group_a, group_b = render_groups(ads_df)
 
+group_a_spec = group_a.get("spec") if group_a["mode"] == "conditions" else None
+group_b_spec = group_b.get("spec") if group_b["mode"] == "conditions" else None
+
+ids_a_input = group_a.get("ids") if group_a["mode"] == "upload" else None
+ids_b_input = group_b.get("ids") if group_b["mode"] == "upload" else None
+
+remainder_b = group_b["mode"] == "remainder"
+
+if group_a["mode"] == "upload" and not ids_a_input:
+    st.warning("Group A is set to 'Upload CSV', but no valid Group A file has been uploaded.")
+    st.stop()
+
+if group_b["mode"] == "upload" and not ids_b_input:
+    st.warning("Group B is set to 'Upload CSV', but no valid Group B file has been uploaded.")
+    st.stop()
 
 # ---------------------------------------------------------------------------
 # Build occurrence table and run comparison
@@ -187,11 +204,19 @@ with st.spinner(f"Building occurrence table from precomputed column for {unit_ty
 result, ids_a, ids_b = compare_groups(
     ads_df=ads_df,
     occ_df=occ_df,
-    group_a=group_a,
-    group_b=group_b,
+    group_a=group_a_spec,
+    group_b=group_b_spec,
+    ids_a=ids_a_input,
+    ids_b=ids_b_input,
     ad_id_col="Nr advertisement",
-    min_count=min_count
+    min_count=min_count,
+    remainder_b=remainder_b
 )
+
+if ids_a_input is not None and ids_b_input is not None:
+    overlap = set(ids_a_input) & set(ids_b_input)
+    if overlap:
+        st.warning(f"{len(overlap)} advertisements occur in both uploaded groups.")
 
 if result.empty:
     st.warning("No terms available for this comparison after filtering/min_count.")
@@ -202,10 +227,16 @@ if result.empty:
 # Optional filtering of the result table
 # ---------------------------------------------------------------------------
 
-if term_filter.strip():
-    result = result[
-        result["term"].astype(str).str.contains(term_filter.strip(), case=False, na=False, regex=False)
-    ]
+term_filters = [t.strip() for t in term_filters if t.strip()]
+
+if term_filters:
+    term_series = result["term"].astype(str)
+    mask = pd.Series(False, index=result.index)
+
+    for filt in term_filters:
+        mask |= term_series.str.contains(filt, case=False, na=False, regex=False)
+
+    result = result[mask]
 
 if result.empty:
     st.warning("No terms match the term filter.")
@@ -230,12 +261,13 @@ res_b = result[result["z"] < 0].sort_values("z", ascending=True)
 # ---------------------------------------------------------------------------
 
 st.subheader("Comparison summary")
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Text scope", text_scope_label)
 c2.metric("Unit type", unit_type)
 c3.metric("Ads in Group A", len(ids_a))
 c4.metric("Ads in Group B", len(ids_b))
 c5.metric("Z filter", f"|z| ≥ {z_threshold}" if remove_insignificant else "off")
+c6.metric("Term filter", "on" if term_filters else "off")
 
 st.subheader("Group definitions")
 
@@ -243,11 +275,11 @@ g1, g2 = st.columns(2)
 
 with g1:
     st.markdown("**Group A**")
-    st.code(format_group_spec(group_a))
+    st.code(format_group_definition(group_a))
 
 with g2:
     st.markdown("**Group B**")
-    st.code(format_group_spec(group_b))
+    st.code(format_group_definition(group_b))
 
 
 # ---------------------------------------------------------------------------
@@ -285,11 +317,3 @@ st.download_button(
     file_name=f"log_odds_{unit_type}_{text_col.replace(' ', '_')}.csv",
     mime="text/csv"
 )
-
-
-# ---------------------------------------------------------------------------
-# Diagnostic information
-# ---------------------------------------------------------------------------
-
-st.subheader("Occurrence source")
-st.info(source_info)

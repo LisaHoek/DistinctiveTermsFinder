@@ -4,6 +4,7 @@ UI helper functions for interactive group definition in the Streamlit app.
 This module contains the logic for:
 - selecting metadata columns that can be used for conditioning
 - rendering filtering rules for Group A and Group B
+- optionally defining groups via uploaded subset CSVs containing `Nr advertisement`
 - formatting group specifications for display in the app
 """
 
@@ -71,7 +72,7 @@ def get_conditioning_columns(df):
     return sorted(cols)
 
 
-def render_group_spec(df, title, key_prefix):
+def render_group_spec(df, title, key_prefix, show_title=True):
     """
     Render Streamlit sidebar widgets for defining one group specification.
 
@@ -80,7 +81,8 @@ def render_group_spec(df, title, key_prefix):
     - either a numeric operator and threshold
       or one/more categorical values
     """
-    st.sidebar.markdown(f"### {title}")
+    if show_title:
+        st.sidebar.markdown(f"### {title}")
 
     metadata_cols = get_conditioning_columns(df)
 
@@ -169,21 +171,121 @@ def render_group_spec(df, title, key_prefix):
     return spec
 
 
-def render_groups(df):
+def load_uploaded_group_ids(uploaded_file, full_df, ad_id_col="Nr advertisement"):
+    """
+    Read uploaded CSV and extract valid advertisement IDs.
+
+    Returns
+    -------
+    ids : list
+        Unique IDs from the uploaded file that also occur in full_df.
+    info : str
+        Informational message for the UI.
+    error : str or None
+        Error message if the file is invalid.
+    """
+    if uploaded_file is None:
+        return [], "", None
+
+    subset_df = pd.read_csv(uploaded_file)
+
+    if ad_id_col not in subset_df.columns:
+        return [], "", f"Uploaded file must contain column '{ad_id_col}'."
+
+    ids = subset_df[ad_id_col].dropna().tolist()
+    ids = list(dict.fromkeys(ids))  # unique, preserve order
+
+    valid_ids = set(full_df[ad_id_col].dropna().tolist())
+    matched_ids = [x for x in ids if x in valid_ids]
+    missing_count = len(ids) - len(matched_ids)
+
+    info = f"Loaded {len(matched_ids)} advertisement IDs"
+    if missing_count:
+        info += f" ({missing_count} not found in the currently uploaded main dataframe)"
+
+    return matched_ids, info, None
+
+
+def render_group_input(df, title, key_prefix, ad_id_col="Nr advertisement", allow_remainder=False):
+    """
+    Render UI for one group, allowing either:
+    - sidebar conditions
+    - uploaded subset CSV with `Nr advertisement`
+    - optionally: all remaining advertisements
+    """
+    st.sidebar.markdown(f"### {title}")
+
+    source_options = ["Conditions", "Upload CSV"]
+    if allow_remainder:
+        source_options.append("All remaining ads")
+
+    source_mode = st.sidebar.radio(
+        f"{title} source",
+        source_options,
+        key=f"{key_prefix}_source_mode",
+        horizontal=True
+    )
+
+    if source_mode == "Upload CSV":
+        uploaded_file = st.sidebar.file_uploader(
+            f"Upload subset CSV for {title}",
+            type=["csv"],
+            key=f"{key_prefix}_uploaded_file",
+            help=f"The uploaded CSV must contain the column '{ad_id_col}'."
+        )
+
+        ids, info, error = load_uploaded_group_ids(uploaded_file, df, ad_id_col=ad_id_col)
+
+        if error:
+            st.sidebar.error(error)
+        elif uploaded_file is not None:
+            st.sidebar.caption(info)
+
+        return {
+            "mode": "upload",
+            "ids": ids,
+            "file_name": uploaded_file.name if uploaded_file is not None else None,
+        }
+
+    if source_mode == "All remaining ads":
+        st.sidebar.caption(f"{title} will contain all advertisements not assigned to the other group.")
+        return {
+            "mode": "remainder"
+        }
+
+    spec = render_group_spec(df, title, key_prefix, show_title=False)
+
+    return {
+        "mode": "conditions",
+        "spec": spec,
+    }
+
+
+def render_groups(df, ad_id_col="Nr advertisement"):
     """
     Render the sidebar controls for both Group A and Group B.
+
+    Group A:
+    - conditions
+    - uploaded subset
+
+    Group B:
+    - conditions
+    - uploaded subset
+    - all remaining advertisements
     """
-    group_a = render_group_spec(df, "Group A", "group_a")
-    group_b = render_group_spec(df, "Group B", "group_b")
+    group_a = render_group_input(
+        df, "Group A", "group_a", ad_id_col=ad_id_col, allow_remainder=False
+    )
+    group_b = render_group_input(
+        df, "Group B", "group_b", ad_id_col=ad_id_col, allow_remainder=True
+    )
     return group_a, group_b
 
 
 def format_group_spec(spec):
     """
     Format a group specification as a readable multiline string.
-
-    This is used in the main app to display the current definitions
-    of Group A and Group B.
     """
     lines = []
     for col, rule in spec.items():
@@ -194,3 +296,22 @@ def format_group_spec(spec):
         else:
             lines.append(f"{col} = {rule}")
     return "\n".join(lines)
+
+
+def format_group_definition(group_def):
+    """
+    Format either a condition-based, upload-based, or remainder-based group definition.
+    """
+    if group_def["mode"] == "upload":
+        if group_def.get("file_name"):
+            return (
+                f"Source: uploaded subset\n"
+                f"File: {group_def['file_name']}\n"
+                f"IDs loaded: {len(group_def.get('ids', []))}"
+            )
+        return "Source: uploaded subset\nNo file uploaded yet."
+
+    if group_def["mode"] == "remainder":
+        return "Source: all remaining advertisements"
+
+    return "Source: sidebar conditions\n" + format_group_spec(group_def.get("spec", {}))

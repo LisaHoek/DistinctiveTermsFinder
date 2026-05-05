@@ -8,6 +8,7 @@ It supports:
 - aggregating term counts for selected advertisement IDs
 - computing weighted log-odds with informative Dirichlet prior
 - returning terms that are distinctive for one group versus another
+- resolving groups either from sidebar conditions or from uploaded ID lists
 """
 
 import pandas as pd
@@ -29,7 +30,8 @@ def is_effectively_numeric(series, threshold=0.9):
     """
     Determine whether a pandas Series behaves like numeric data.
 
-    A column is treated as effectively numeric when at least `threshold` proportion of its values can be converted to numbers.
+    A column is treated as effectively numeric when at least `threshold` proportion of its 
+    values can be converted to numbers.
 
     This heuristic is useful in the UI when deciding whether a column
     should be presented with numeric comparison operators or categorical value selection.
@@ -184,17 +186,65 @@ def weighted_log_odds(counts_a, counts_b, prior=None, min_count=5, prior_strengt
     return out
 
 
-def compare_groups(ads_df, occ_df, group_a, group_b, ad_id_col="Nr advertisement", min_count=5):
+def resolve_group_ids(ads_df, group_spec=None, ids=None, ad_id_col="Nr advertisement"):
+    """
+    Resolve a group to a set of advertisement IDs.
+
+    A group can be defined in two ways:
+
+    1. By explicit IDs, e.g. from an uploaded subset CSV
+    2. By a sidebar condition specification (`group_spec`)
+
+    If `ids` is provided, it takes precedence over `group_spec`.
+
+    Parameters
+    ----------
+    ads_df : pandas.DataFrame
+        Main advertisement dataframe.
+    group_spec : dict or None
+        Rule specification for filtering ads_df.
+    ids : iterable or None
+        Explicit advertisement IDs to use for the group.
+    ad_id_col : str, optional
+        Name of the advertisement ID column.
+
+    Returns
+    -------
+    set
+        Set of valid advertisement IDs found in the main dataframe.
+    """
+    valid_ids = set(ads_df[ad_id_col].dropna())
+
+    if ids is not None:
+        return set(ids) & valid_ids
+
+    mask = build_mask(ads_df, group_spec)
+    return set(ads_df.loc[mask, ad_id_col].dropna())
+
+
+def compare_groups(
+    ads_df,
+    occ_df,
+    group_a=None,
+    group_b=None,
+    ids_a=None,
+    ids_b=None,
+    ad_id_col="Nr advertisement",
+    min_count=5,
+    remainder_b=False
+):
     """
     Compare two advertisement groups on term usage.
 
-    The procedure:
-    1. Build masks for Group A and Group B from their rule specifications.
-    2. Collect advertisement IDs for both groups.
-    3. Remove overlap from Group B so that advertisements already assigned
-       to Group A are not counted twice.
-    4. Aggregate term counts for both groups.
-    5. Compute weighted log-odds with z-scores.
+    Each group can be defined either:
+    - by a rule specification (`group_a`, `group_b`)
+    - or by explicit advertisement IDs (`ids_a`, `ids_b`), e.g. from uploaded subset CSVs
+
+    Additionally, Group B can optionally be defined as all advertisements not assigned to 
+    Group A.
+
+    If explicit IDs are provided for a group, they take precedence over the condition 
+    specification for that group.
 
     Parameters
     ----------
@@ -202,14 +252,20 @@ def compare_groups(ads_df, occ_df, group_a, group_b, ad_id_col="Nr advertisement
         Main advertisement dataframe.
     occ_df : pandas.DataFrame
         Occurrence table produced from a precomputed list column.
-    group_a : dict
+    group_a : dict or None
         Rule specification for Group A.
-    group_b : dict
+    group_b : dict or None
         Rule specification for Group B.
+    ids_a : iterable or None
+        Explicit advertisement IDs for Group A.
+    ids_b : iterable or None
+        Explicit advertisement IDs for Group B.
     ad_id_col : str, optional
         Advertisement ID column, by default "Nr advertisement".
     min_count : int, optional
         Minimum total term frequency required to retain a term.
+    remainder_b : bool, optional
+        If True, Group B is defined as all valid advertisements not in Group A.
 
     Returns
     -------
@@ -220,16 +276,28 @@ def compare_groups(ads_df, occ_df, group_a, group_b, ad_id_col="Nr advertisement
         - ids_a : set
             Advertisement IDs assigned to Group A.
         - ids_b : set
-            Advertisement IDs assigned to Group B (after overlap removal).
+            Advertisement IDs assigned to Group B.
     """
-    mask_a = build_mask(ads_df, group_a)
-    mask_b = build_mask(ads_df, group_b)
+    all_ids = set(ads_df[ad_id_col].dropna())
 
-    ids_a = set(ads_df.loc[mask_a, ad_id_col])
-    ids_b = set(ads_df.loc[mask_b, ad_id_col])
+    ids_a = resolve_group_ids(
+        ads_df=ads_df,
+        group_spec=group_a,
+        ids=ids_a,
+        ad_id_col=ad_id_col
+    )
 
-    # remove overlap
-    ids_b = ids_b - ids_a
+    if remainder_b:
+        ids_b = all_ids - ids_a
+    else:
+        ids_b = resolve_group_ids(
+            ads_df=ads_df,
+            group_spec=group_b,
+            ids=ids_b,
+            ad_id_col=ad_id_col
+        )
+        # Remove overlap so ads in Group A are not also counted in Group B.
+        ids_b = ids_b - ids_a
 
     counts_a = get_term_counts(occ_df, ids_a)
     counts_b = get_term_counts(occ_df, ids_b)
