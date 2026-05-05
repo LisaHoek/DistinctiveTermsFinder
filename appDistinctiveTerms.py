@@ -45,7 +45,7 @@ SCOPE_LABEL_TO_COL = {
 
 SUPPORTED_UNITS = [
 # Supported types of precomputed language units.    
-    "words", "single nouns", "phrase nouns", "single and phrase nouns"
+    "words", "single nouns", "phrase nouns", "single and phrase nouns", "single adjectives"
 ]
 
 
