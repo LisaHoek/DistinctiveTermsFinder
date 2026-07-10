@@ -101,7 +101,19 @@ if uploaded_file is None:
 # Load and validate input data
 # ---------------------------------------------------------------------------
 
-ads_df = pd.read_csv(uploaded_file)
+@st.cache_data(show_spinner="Reading uploaded dataframe...", max_entries=2, ttl=3600)
+def load_ads_df(file):
+    """
+    Parse the uploaded CSV once per unique file and cache the result.
+
+    Without this cache, Streamlit re-parses the full CSV into a new
+    in-memory dataframe on every widget interaction, since any sidebar
+    change reruns the whole script.
+    """
+    return pd.read_csv(file)
+
+
+ads_df = load_ads_df(uploaded_file)
 
 if "Nr advertisement" not in ads_df.columns:
     st.error("Missing required column: 'Nr advertisement'")

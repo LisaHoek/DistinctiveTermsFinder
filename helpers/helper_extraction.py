@@ -101,7 +101,7 @@ def build_occ_from_list_column(df, list_col, ad_id_col="Nr advertisement"):
     return occ_df
 
 
-@st.cache_data(show_spinner=True)
+
 def build_occurrence_table(ads_df, text_col, unit_type, ad_id_col="Nr advertisement"):
     """
     Build an occurrence table from a precomputed list column.
