@@ -25,10 +25,18 @@ The app assumes that the uploaded dataframe already contains precomputed list-va
 These columns are converted into occurrence tables on demand.
 """
 
+import io
+import zipfile
+
 import streamlit as st
 import pandas as pd
 
-from helpers.helper_UI import render_groups, format_group_definition
+from helpers.helper_UI import (
+    render_groups,
+    format_group_definition,
+    serialize_group_definition,
+    apply_imported_group_definition,
+)
 from helpers.helper_statistics import compare_groups
 from helpers.helper_extraction import build_occurrence_table
 
@@ -101,19 +109,7 @@ if uploaded_file is None:
 # Load and validate input data
 # ---------------------------------------------------------------------------
 
-@st.cache_data(show_spinner="Reading uploaded dataframe...", max_entries=2, ttl=3600)
-def load_ads_df(file):
-    """
-    Parse the uploaded CSV once per unique file and cache the result.
-
-    Without this cache, Streamlit re-parses the full CSV into a new
-    in-memory dataframe on every widget interaction, since any sidebar
-    change reruns the whole script.
-    """
-    return pd.read_csv(file)
-
-
-ads_df = load_ads_df(uploaded_file)
+ads_df = pd.read_csv(uploaded_file)
 
 if "Nr advertisement" not in ads_df.columns:
     st.error("Missing required column: 'Nr advertisement'")
@@ -181,6 +177,24 @@ term_filters = st.sidebar.multiselect(
     accept_new_options=True,
     help="Type a term and press Enter. Each term is matched as a substring. Example: huwelijk"
 )
+
+# Import previously exported group conditions (optional), before the group
+# widgets are rendered, so that the imported values can pre-populate them.
+with st.sidebar.expander("Import group conditions"):
+    imported_conditions_a = st.file_uploader(
+        "Group A conditions (.txt)", type=["txt"], key="import_group_a_conditions"
+    )
+    imported_conditions_b = st.file_uploader(
+        "Group B conditions (.txt)", type=["txt"], key="import_group_b_conditions"
+    )
+
+    import_msg_a = apply_imported_group_definition(imported_conditions_a, "group_a")
+    import_msg_b = apply_imported_group_definition(imported_conditions_b, "group_b")
+
+    if import_msg_a:
+        st.info(f"Group A: {import_msg_a}")
+    if import_msg_b:
+        st.info(f"Group B: {import_msg_b}")
 
 # Render the sidebar controls for defining Group A and Group B.
 group_a, group_b = render_groups(ads_df)
@@ -328,4 +342,49 @@ st.download_button(
     data=csv,
     file_name=f"log_odds_{unit_type}_{text_col.replace(' ', '_')}.csv",
     mime="text/csv"
+)
+
+
+# ---------------------------------------------------------------------------
+# Download original advertisement data + group conditions (as a .zip folder)
+# ---------------------------------------------------------------------------
+
+st.subheader("Download group subsets + conditions")
+st.caption(
+    "Download a .zip folder with the original rows (not the term table) for Group A "
+    "and Group B, plus a .txt file per group describing how it was defined. The "
+    "condition files can be re-imported in a later session via the sidebar's "
+    "'Import group conditions' panel."
+)
+
+column_choice = st.radio(
+    "Columns to include",
+    ["All columns", "Only selected text scope + language unit"],
+    horizontal=True,
+)
+
+if column_choice == "All columns":
+    export_cols = list(ads_df.columns)
+else:
+    unit_col = f"{unit_type} {text_col}"
+    export_cols = ["Nr advertisement"]
+    for col in [text_col, unit_col]:
+        if col in ads_df.columns and col not in export_cols:
+            export_cols.append(col)
+
+df_a_export = ads_df[ads_df["Nr advertisement"].isin(ids_a)][export_cols]
+df_b_export = ads_df[ads_df["Nr advertisement"].isin(ids_b)][export_cols]
+
+zip_buffer = io.BytesIO()
+with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+    zf.writestr("group_a_texts.csv", df_a_export.to_csv(index=False))
+    zf.writestr("group_b_texts.csv", df_b_export.to_csv(index=False))
+    zf.writestr("group_a_conditions.txt", serialize_group_definition(group_a))
+    zf.writestr("group_b_conditions.txt", serialize_group_definition(group_b))
+
+st.download_button(
+    "Download group subsets + conditions (.zip)",
+    data=zip_buffer.getvalue(),
+    file_name=f"group_subsets_{unit_type}_{text_col.replace(' ', '_')}.zip",
+    mime="application/zip",
 )

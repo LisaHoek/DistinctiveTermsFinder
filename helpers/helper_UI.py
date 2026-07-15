@@ -11,6 +11,7 @@ This module contains the logic for:
 import streamlit as st
 import pandas as pd
 import numpy as np
+import json
 from helpers.helper_statistics import is_effectively_numeric
 
 EXCLUDED_CONDITIONING_COLS = {
@@ -315,3 +316,96 @@ def format_group_definition(group_def):
         return "Source: all remaining advertisements"
 
     return "Source: sidebar conditions\n" + format_group_spec(group_def.get("spec", {}))
+
+
+def serialize_group_definition(group_def):
+    """
+    Serialize a group definition to a JSON string suitable for saving to a
+    text file and re-importing in a later session.
+
+    Only "conditions" mode group definitions can be fully reconstructed on
+    import; "upload" and "remainder" mode definitions are saved for
+    reference only.
+    """
+    if group_def["mode"] == "conditions":
+        tagged_spec = {}
+        for col, rule in group_def.get("spec", {}).items():
+            if isinstance(rule, tuple) and len(rule) == 2:
+                tagged_spec[col] = {"type": "range", "op": rule[0], "value": rule[1]}
+            elif isinstance(rule, list):
+                tagged_spec[col] = {"type": "multi", "value": rule}
+            else:
+                tagged_spec[col] = {"type": "single", "value": rule}
+        payload = {"mode": "conditions", "spec": tagged_spec}
+
+    elif group_def["mode"] == "upload":
+        payload = {
+            "mode": "upload",
+            "file_name": group_def.get("file_name"),
+            "ids_count": len(group_def.get("ids", [])),
+        }
+
+    else:
+        payload = {"mode": "remainder"}
+
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def apply_imported_group_definition(uploaded_file, key_prefix):
+    """
+    Read a previously exported group-conditions file and, if it holds a
+    "conditions" mode group definition, pre-populate the corresponding
+    sidebar widgets via `st.session_state` so the group is reconstructed
+    automatically.
+
+    Must be called before the matching `render_group_input`/`render_groups`
+    call in the same script run, since Streamlit only honors
+    `st.session_state` values set prior to a widget's first instantiation
+    in that run.
+
+    Returns a message string describing what happened, or None if there is
+    nothing to report (no file uploaded).
+    """
+    if uploaded_file is None:
+        return None
+
+    content = uploaded_file.getvalue().decode("utf-8")
+    sig_key = f"_{key_prefix}_imported_sig"
+
+    if st.session_state.get(sig_key) == content:
+        return None  # already applied on a previous run
+
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return "This file is not a valid conditions export and could not be imported."
+
+    if payload.get("mode") != "conditions":
+        st.session_state[sig_key] = content
+        return (
+            f"This conditions file describes a '{payload.get('mode')}' group "
+            "(uploaded subset or remainder), so it cannot be auto-imported as "
+            "sidebar conditions. Recreate this group manually."
+        )
+
+    spec = payload.get("spec", {})
+
+    st.session_state[f"{key_prefix}_source_mode"] = "Conditions"
+    st.session_state[f"{key_prefix}_n_rules"] = max(len(spec), 1)
+
+    for i, (col, rule) in enumerate(spec.items()):
+        st.session_state[f"{key_prefix}_col_{i}"] = col
+        rule_type = rule.get("type")
+
+        if rule_type == "range":
+            st.session_state[f"{key_prefix}_op_{i}"] = rule["op"]
+            st.session_state[f"{key_prefix}_value_{i}"] = rule["value"]
+        elif rule_type == "multi":
+            st.session_state[f"{key_prefix}_mode_{i}"] = "multiple values"
+            st.session_state[f"{key_prefix}_multi_{i}"] = rule["value"]
+        else:
+            st.session_state[f"{key_prefix}_mode_{i}"] = "single value"
+            st.session_state[f"{key_prefix}_single_{i}"] = rule["value"]
+
+    st.session_state[sig_key] = content
+    return f"Imported {len(spec)} condition(s) for this group."
