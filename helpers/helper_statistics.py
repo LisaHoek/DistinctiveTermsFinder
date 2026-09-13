@@ -42,32 +42,45 @@ def is_effectively_numeric(series, threshold=0.9):
 
 def build_mask(df, spec=None):
     """
-    Build a boolean mask from a dictionary of filtering rules.
+    Build a boolean mask from a list of filtering rules, AND'd together.
+
+    `spec` is a list of (column, rule) pairs. Unlike a dict, a list allows
+    the same column to appear more than once, which is required to express
+    a range (e.g. Year > 1900 AND Year <= 1969 needs two separate rules on
+    the same column -- a dict keyed by column could only ever keep one of
+    them).
 
     Examples
     --------
+    [("Year", ("<", 1960))]
+    [("Year", (">", 1900)), ("Year", ("<=", 1969))]
+    [("Goal of advertisement", "Marriage")]
+    [("Area number", ["1", "2"])]
+    [("Sex (SS)", "Female"), ("Year", (">=", 1960))]
+
+    A plain dict is also accepted, for simple callers that only ever need
+    one rule per column:
     {"Year": ("<", 1960)}
-    {"Goal of advertisement": "Marriage"}
-    {"Area number": ["1", "2"]}
-    {"Sex (SS)": "Female", "Year": (">=", 1960)}
 
     Rule types
     ----------
     1. Numeric comparison:
-       {"Year": ("<", 1960)}
+       ("Year", ("<", 1960))
 
     2. Single categorical value:
-       {"Goal of advertisement": "Marriage"}
+       ("Goal of advertisement", "Marriage")
 
     3. Multiple allowed values:
-       {"Area number": ["1", "2"]}
+       ("Area number", ["1", "2"])
     """
-    if spec is None or spec == "ALL" or spec == {}:
+    if spec is None or spec == "ALL" or spec == {} or spec == []:
         return pd.Series(True, index=df.index)
+
+    items = spec.items() if isinstance(spec, dict) else spec
 
     mask = pd.Series(True, index=df.index)
 
-    for col, rule in spec.items():
+    for col, rule in items:
         s = df[col]
 
         if isinstance(rule, tuple) and len(rule) == 2 and rule[0] in OPS:

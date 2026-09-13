@@ -81,6 +81,12 @@ def render_group_spec(df, title, key_prefix, show_title=True):
     - a metadata column
     - either a numeric operator and threshold
       or one/more categorical values
+
+    Returns a list of (column, rule) pairs rather than a dict, so the same
+    column can be used in more than one condition -- e.g. Year > 1900 and
+    Year <= 1969 together express a range, which a dict keyed by column
+    couldn't represent (the second condition would silently overwrite the
+    first).
     """
     if show_title:
         st.sidebar.markdown(f"### {title}")
@@ -96,7 +102,7 @@ def render_group_spec(df, title, key_prefix, show_title=True):
         key=f"{key_prefix}_n_rules"
     )
 
-    spec = {}
+    spec = []
 
     for i in range(n_rules):
         st.sidebar.markdown(f"**Condition {i+1}**")
@@ -141,7 +147,7 @@ def render_group_spec(df, title, key_prefix, show_title=True):
                 key=f"{key_prefix}_value_{i}"
             )
 
-            spec[col] = (op, value)
+            spec.append((col, (op, value)))
 
         else:
             values = sorted([v for v in s.dropna().astype(str).unique().tolist() if v != ""])
@@ -159,7 +165,7 @@ def render_group_spec(df, title, key_prefix, show_title=True):
                     values,
                     key=f"{key_prefix}_single_{i}"
                 )
-                spec[col] = value
+                spec.append((col, value))
             else:
                 selected = st.sidebar.multiselect(
                     f"Values {i+1}",
@@ -167,7 +173,7 @@ def render_group_spec(df, title, key_prefix, show_title=True):
                     default=values[:1] if values else [],
                     key=f"{key_prefix}_multi_{i}"
                 )
-                spec[col] = selected
+                spec.append((col, selected))
 
     return spec
 
@@ -287,9 +293,13 @@ def render_groups(df, ad_id_col="Nr advertisement"):
 def format_group_spec(spec):
     """
     Format a group specification as a readable multiline string.
+
+    `spec` is a list of (column, rule) pairs (a plain dict is also
+    accepted, for specs that predate support for repeated columns).
     """
+    items = spec.items() if isinstance(spec, dict) else spec
     lines = []
-    for col, rule in spec.items():
+    for col, rule in items:
         if isinstance(rule, tuple) and len(rule) == 2:
             lines.append(f"{col} {rule[0]} {rule[1]}")
         elif isinstance(rule, list):
@@ -315,7 +325,7 @@ def format_group_definition(group_def):
     if group_def["mode"] == "remainder":
         return "Source: all remaining advertisements"
 
-    return "Source: sidebar conditions\n" + format_group_spec(group_def.get("spec", {}))
+    return "Source: sidebar conditions\n" + format_group_spec(group_def.get("spec", []))
 
 
 def serialize_group_definition(group_def):
@@ -326,16 +336,24 @@ def serialize_group_definition(group_def):
     Only "conditions" mode group definitions can be fully reconstructed on
     import; "upload" and "remainder" mode definitions are saved for
     reference only.
+
+    The exported `spec` is a list of tagged rules rather than a dict keyed
+    by column, since a JSON object can't hold two entries for the same key
+    -- a dict would lose one side of a range condition (e.g. Year > 1900
+    and Year <= 1969 on the same column) exactly like the in-memory spec
+    used to.
     """
     if group_def["mode"] == "conditions":
-        tagged_spec = {}
-        for col, rule in group_def.get("spec", {}).items():
+        spec = group_def.get("spec", [])
+        items = spec.items() if isinstance(spec, dict) else spec
+        tagged_spec = []
+        for col, rule in items:
             if isinstance(rule, tuple) and len(rule) == 2:
-                tagged_spec[col] = {"type": "range", "op": rule[0], "value": rule[1]}
+                tagged_spec.append({"col": col, "type": "range", "op": rule[0], "value": rule[1]})
             elif isinstance(rule, list):
-                tagged_spec[col] = {"type": "multi", "value": rule}
+                tagged_spec.append({"col": col, "type": "multi", "value": rule})
             else:
-                tagged_spec[col] = {"type": "single", "value": rule}
+                tagged_spec.append({"col": col, "type": "single", "value": rule})
         payload = {"mode": "conditions", "spec": tagged_spec}
 
     elif group_def["mode"] == "upload":
@@ -388,14 +406,23 @@ def apply_imported_group_definition(uploaded_file, key_prefix):
             "sidebar conditions. Recreate this group manually."
         )
 
-    spec = payload.get("spec", {})
+    spec = payload.get("spec", [])
+
+    # The exported format used to be a dict keyed by column (one rule per
+    # column, so it couldn't represent e.g. a Year range across two
+    # conditions); it's now a list of {"col": ..., "type": ..., ...} items,
+    # which allows repeats. Normalize both into (col, rule_type, rule) so
+    # the rest of this function doesn't need to care which was imported.
+    if isinstance(spec, dict):
+        rules = [(col, rule.get("type"), rule) for col, rule in spec.items()]
+    else:
+        rules = [(item["col"], item.get("type"), item) for item in spec]
 
     st.session_state[f"{key_prefix}_source_mode"] = "Conditions"
-    st.session_state[f"{key_prefix}_n_rules"] = max(len(spec), 1)
+    st.session_state[f"{key_prefix}_n_rules"] = max(len(rules), 1)
 
-    for i, (col, rule) in enumerate(spec.items()):
+    for i, (col, rule_type, rule) in enumerate(rules):
         st.session_state[f"{key_prefix}_col_{i}"] = col
-        rule_type = rule.get("type")
 
         if rule_type == "range":
             st.session_state[f"{key_prefix}_op_{i}"] = rule["op"]
@@ -408,4 +435,4 @@ def apply_imported_group_definition(uploaded_file, key_prefix):
             st.session_state[f"{key_prefix}_single_{i}"] = rule["value"]
 
     st.session_state[sig_key] = content
-    return f"Imported {len(spec)} condition(s) for this group."
+    return f"Imported {len(rules)} condition(s) for this group."
